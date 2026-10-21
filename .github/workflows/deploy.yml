@@ -47,6 +47,10 @@ jobs:
           fi
           if V=$(curl -fsS --max-time 5 http://127.0.0.1:11434/api/version); then
             echo "Ollama $V" | tee -a pre.log
+            # Modeli na serveru i trenutno ucitani u GPU (zajednicka Ollama za sve projekte)
+            curl -fsS --max-time 5 http://127.0.0.1:11434/api/tags | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ' | sed 's/^/Modeli: /' | tee -a pre.log
+            echo | tee -a pre.log
+            curl -fsS --max-time 5 http://127.0.0.1:11434/api/ps | grep -oE '"name":"[^"]*"|"size_vram":[0-9]+' | paste - - | sed -E 's/"name":"([^"]*)"\s+"size_vram":([0-9]+)/\1 \2/' | awk '{printf "Ucitano: %s %.1f GB VRAM\n", $1, $2/1e9}' | tee -a pre.log
           else
             echo "Ollama ne odgovara na 127.0.0.1:11434, AI ce raditi u rezervnom rezimu" | tee -a pre.log
           fi
@@ -94,8 +98,9 @@ jobs:
             [ -n "$v" ] && set_env "$k" "$v"
           done
           chmod 600 "$ENVF"
-          grep -E '^(DEMO_HOST|WEB_PORT|AI_MODE|LLM_BASE_URL|LLM_SERVED_NAME|OLLAMA_BASE_MODEL|LANGFUSE_HOST)=' "$ENVF"
-          if grep -q '^LANGFUSE_PUBLIC_KEY=.\+' "$ENVF"; then echo "Langfuse tragovi: ukljuceni"; else echo "Langfuse tragovi: iskljuceni (nema kljuceva)"; fi
+          grep -E '^(DEMO_HOST|WEB_PORT|AI_MODE|LLM_BASE_URL|LLM_SERVED_NAME|OLLAMA_BASE_MODEL|LANGFUSE_HOST|LANGFUSE_UI_URL)=' "$ENVF" | tee cfg.log
+          if grep -q '^LANGFUSE_PUBLIC_KEY=.\+' "$ENVF"; then echo "Langfuse tragovi: ukljuceni"; else echo "Langfuse tragovi: iskljuceni (nema kljuceva)"; fi | tee -a cfg.log
+          bash deploy/gh-annotate.sh notice "Konfiguracija" cfg.log
 
       - name: Provera porta
         run: |
@@ -114,6 +119,10 @@ jobs:
 
       - name: Pokretanje
         run: |
+          # Bez GPU-a u Docker-u ukloni kontejner za slike ostao od ranijeg pokusaja
+          if [ -z "$COMPOSE_PROFILES" ]; then
+            docker compose --env-file "$CONFIG_DIR/.env" --profile gpu rm -sf imagegen || true
+          fi
           if docker compose --env-file "$CONFIG_DIR/.env" up -d --remove-orphans > up.log 2>&1; then
             cat up.log
             exit 0
