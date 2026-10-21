@@ -225,9 +225,12 @@ services:
     volumes:
       - tei-cache:/data
 
+  # Generisanje slika trazi GPU u Docker-u, pa je u profilu "gpu"
+  # (workflow ga ukljucuje sam kada Docker vidi GPU)
   imagegen:
     <<: *gpu
     build: ./imagegen
+    profiles: ["gpu"]
     restart: unless-stopped
     environment:
       HF_TOKEN: ${HF_TOKEN:-}

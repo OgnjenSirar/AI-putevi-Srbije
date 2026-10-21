@@ -33,16 +33,26 @@ jobs:
           docker version --format 'Docker {{.Server.Version}}'
           docker compose version
           if command -v nvidia-smi >/dev/null; then
-            nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
+            nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv | tee pre.log
           else
-            echo "UPOZORENJE: nvidia-smi nije pronadjen"
+            echo "nvidia-smi nije pronadjen" | tee pre.log
           fi
-          if curl -fsS --max-time 5 http://127.0.0.1:11434/api/version; then
-            echo
+          # Generisanje slika trazi GPU u Docker-u (NVIDIA Container Toolkit), ostalo radi i bez njega
+          if timeout 180 docker run --rm --gpus all busybox:1.36 true >/dev/null 2>&1; then
+            echo "COMPOSE_PROFILES=gpu" >> "$GITHUB_ENV"
+            echo "Docker vidi GPU, generisanje slika ukljuceno" | tee -a pre.log
           else
-            echo "UPOZORENJE: Ollama ne odgovara na 127.0.0.1:11434, AI ce raditi u rezervnom rezimu"
+            echo "COMPOSE_PROFILES=" >> "$GITHUB_ENV"
+            echo "Docker NE vidi GPU (NVIDIA Container Toolkit), generisanje slika iskljuceno" | tee -a pre.log
           fi
-          df -h / | tail -1
+          if V=$(curl -fsS --max-time 5 http://127.0.0.1:11434/api/version); then
+            echo "Ollama $V" | tee -a pre.log
+          else
+            echo "Ollama ne odgovara na 127.0.0.1:11434, AI ce raditi u rezervnom rezimu" | tee -a pre.log
+          fi
+          df -h / | tail -1 | tee -a pre.log
+          free -g | head -2 | tee -a pre.log
+          bash deploy/gh-annotate.sh notice "Server" pre.log
 
       - name: Priprema .env
         env:
@@ -103,7 +113,20 @@ jobs:
         run: docker compose --env-file "$CONFIG_DIR/.env" build --pull
 
       - name: Pokretanje
-        run: docker compose --env-file "$CONFIG_DIR/.env" up -d --remove-orphans
+        run: |
+          if docker compose --env-file "$CONFIG_DIR/.env" up -d --remove-orphans > up.log 2>&1; then
+            cat up.log
+            exit 0
+          fi
+          cat up.log
+          bash deploy/gh-annotate.sh error "docker compose up" up.log 30
+          docker compose --env-file "$CONFIG_DIR/.env" ps -a --format '{{.Service}} {{.State}} {{.Status}}' | tee ps.log
+          bash deploy/gh-annotate.sh error "Stanje kontejnera" ps.log 40
+          for svc in $(awk '$2!="running" && $0 !~ /\(0\)/ {print $1}' ps.log); do
+            docker compose --env-file "$CONFIG_DIR/.env" logs --no-color --tail=40 "$svc" > "svc-$svc.log" 2>&1
+            bash deploy/gh-annotate.sh error "Log $svc" "svc-$svc.log" 40
+          done
+          exit 1
 
       - name: Cekanje da aplikacija proradi
         run: |
@@ -112,7 +135,8 @@ jobs:
             if curl -fsS "http://localhost:${PORT:-8090}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
             sleep 5
           done
-          docker compose --env-file "$CONFIG_DIR/.env" logs --tail=80 api worker web
+          docker compose --env-file "$CONFIG_DIR/.env" logs --no-color --tail=80 api worker web | tee health.log
+          bash deploy/gh-annotate.sh error "Aplikacija ne odgovara" health.log 40
           exit 1
 
       - name: Priprema jezickog modela u Ollama
@@ -121,8 +145,13 @@ jobs:
           # ollama-init preuzima model jednom (nekoliko GB), sledeci deploy-i traju par sekundi
           CID=$(docker compose --env-file "$CONFIG_DIR/.env" ps -aq ollama-init)
           while [ "$(docker inspect -f '{{.State.Status}}' "$CID")" = "running" ]; do sleep 10; done
-          docker logs "$CID"
-          exit "$(docker inspect -f '{{.State.ExitCode}}' "$CID")"
+          docker logs "$CID" > init.log 2>&1
+          cat init.log
+          CODE=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
+          if [ "$CODE" = "0" ]; then bash deploy/gh-annotate.sh notice "Ollama model" init.log 6
+          else bash deploy/gh-annotate.sh error "Ollama model" init.log 20
+          fi
+          exit "$CODE"
 
       - name: Reset demo baze
         if: ${{ github.event.inputs.reset_demo == 'true' }}
@@ -132,7 +161,8 @@ jobs:
       - name: Stanje servisa
         if: always()
         run: |
-          docker compose --env-file "$CONFIG_DIR/.env" ps
+          docker compose --env-file "$CONFIG_DIR/.env" ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' | tee ps-final.log
+          bash deploy/gh-annotate.sh notice "Kontejneri" ps-final.log 40
           echo "Embedding, reranker i model za slike se pri prvom pokretanju preuzimaju sa Hugging Face-a (oko 20 GB),"
           echo "pa mogu biti spremni tek posle nekoliko minuta. Stanje se vidi u aplikaciji, Administracija, Stanje sistema."
 

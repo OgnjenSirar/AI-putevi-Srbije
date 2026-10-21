@@ -17,7 +17,7 @@ Sve komponente su open-source. Svi podaci (korisnici, tablice, TAG brojevi, cene
 | `imagegen` | FLUX.2 klein 4B za AI pozadine objava | Apache 2.0 |
 | `mailpit` | Prikaz poslatih odgovora (umesto pravog SMTP-a), na putanji `/mailpit/` | MIT |
 
-Opcioni profili, isključeni na deljenom serveru: `vllm` (sopstveni vLLM umesto Ollama) i `langfuse` (sopstveni Langfuse sa ClickHouse, MinIO i Redis).
+Servis `imagegen` je u profilu `gpu`, koji workflow sam uključuje kada Docker vidi GPU (NVIDIA Container Toolkit). Bez toga demo radi u celosti, samo se pozadina objave ne generiše nego otprema. Opcioni profili, isključeni na deljenom serveru: `vllm` (sopstveni vLLM umesto Ollama) i `langfuse` (sopstveni Langfuse sa ClickHouse, MinIO i Redis).
 
 ## Rad na deljenom serveru
 
@@ -78,7 +78,8 @@ Ručno pokretanje workflow-a (Actions, Deploy demo, Run workflow) nudi i opciju 
 
 ```bash
 cp .env.example .env        # promeniti DEMO_HOST i lozinke
-docker compose --env-file .env up -d --build
+docker compose --env-file .env up -d --build            # bez generisanja slika
+COMPOSE_PROFILES=gpu docker compose --env-file .env up -d --build   # sa generisanjem slika
 docker compose ps
 docker compose logs ollama-init
 ```
