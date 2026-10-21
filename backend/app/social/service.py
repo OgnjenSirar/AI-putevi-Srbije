@@ -204,14 +204,14 @@ def set_upload_background(db: Session, post: SocialPost, content: bytes, filenam
 
 # ---------------------------------------------------------------- simulirana objava
 
-def publish_simulated(db: Session, post: SocialPost, actor: str) -> SocialPost:
+def publish_simulated(db: Session, post: SocialPost, actor: str, base_url: str | None = None) -> SocialPost:
     """Pravi tacno one pozive koje bi produkcija poslala Meta Graph API-ju, ali ih ne salje."""
     img = post.images.get("portret") or next(iter(post.images.values()))
     public_dir = media_root() / "public"
     public_dir.mkdir(exist_ok=True)
     pub_name = f"{uuid.uuid4().hex}.jpg"
     shutil.copy(img, public_dir / pub_name)
-    public_url = f"{settings.public_base_url.rstrip('/')}/media/public/{pub_name}"
+    public_url = f"{(base_url or settings.public_base_url).rstrip('/')}/media/public/{pub_name}"
     token = "EAAG...(system user token iz sefa za tajne, skriven)"
     ts = datetime.now(timezone.utc)
     container = f"1789{int(ts.timestamp())}"

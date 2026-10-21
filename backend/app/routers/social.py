@@ -1,7 +1,7 @@
 """Drustvene mreze: priprema objave (AI tekst + sablon), AI pozadina, odobrenje i simulirana objava."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -108,8 +108,12 @@ def approve(pid: int, db: Session = Depends(get_db), user: User = Depends(curren
 
 
 @router.post("/posts/{pid}/publish")
-def publish(pid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def publish(pid: int, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
     p = _get(db, pid)
     if p.status != "odobreno":
         raise HTTPException(400, "Objava mora biti odobrena pre objavljivanja")
-    return service.post_to_dict(service.publish_simulated(db, p, user.full_name))
+    # Javna adresa slike za Instagram: iz DEMO_HOST, a ako nije podesen, iz adrese kojom je korisnik otvorio demo
+    base = service.settings.public_base_url
+    if "localhost" in base and request.headers.get("host"):
+        base = f"{request.url.scheme}://{request.headers['host']}"
+    return service.post_to_dict(service.publish_simulated(db, p, user.full_name, base_url=base))
