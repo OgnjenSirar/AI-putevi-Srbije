@@ -18,7 +18,7 @@ type Status = {
 }
 
 const SERVICES: [string, string, string][] = [
-  ['llm', 'Jezički model (vLLM)', 'analiza, predlozi odgovora, tekst objava'],
+  ['llm', 'Jezički model (Gemma 4)', 'analiza, predlozi odgovora, tekst objava'],
   ['embed', 'Embedding model (BGE-M3)', 'semantička pretraga znanja službe'],
   ['rerank', 'Reranker (bge-reranker-v2-m3)', 'preraspoređivanje rezultata pretrage'],
   ['imagegen', 'Generisanje slika (FLUX.2 klein 4B)', 'AI pozadine za objave'],
@@ -72,7 +72,8 @@ function SystemStatus() {
                 <div>
                   <div className="font-medium text-sm">{label}</div>
                   <div className="text-[13px] text-sivo">{desc}</div>
-                  {k === 'imagegen' && ig && <div className="text-[12.5px] text-sivo">stanje: {String(ig.status)}{ig.gpu_free_gb ? `, slobodno ${String(ig.gpu_free_gb)} od ${String(ig.gpu_total_gb)} GB GPU memorije` : ''}</div>}
+                  {k === 'llm' && <div className="text-[12.5px] text-sivo">model: {data.llm_model}</div>}
+                  {k === 'imagegen' && ig && <div className="text-[12.5px] text-sivo">stanje: {String(ig.status)}{ig.u_memoriji === false ? ' (model se učitava pri prvom zahtevu)' : ''}{ig.gpu_free_gb ? `, slobodno ${String(ig.gpu_free_gb)} od ${String(ig.gpu_total_gb)} GB GPU memorije` : ''}</div>}
                 </div>
                 <Chip tone={ok ? 'autoput' : 'stop'}>{ok ? 'radi' : 'nedostupan'}</Chip>
               </li>

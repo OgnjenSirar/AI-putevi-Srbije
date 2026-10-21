@@ -8,34 +8,69 @@ Sve komponente su open-source. Svi podaci (korisnici, tablice, TAG brojevi, cene
 
 | Servis | Uloga | Licenca |
 |---|---|---|
-| `web` | React aplikacija i nginx (port `WEB_PORT`, podrazumevano 8080) | MIT |
+| `web` | React aplikacija i nginx, jedini port otvoren spolja (`WEB_PORT`, podrazumevano 8090) | MIT |
 | `api`, `worker` | FastAPI aplikacija i pozadinski radnik (obrada pošte, AI) | MIT |
 | `db` | PostgreSQL 16 sa pgvector | PostgreSQL |
-| `llm` | vLLM sa modelom Gemma 4 12B (4 bita) | Apache 2.0 |
+| `ollama-hostfwd`, `ollama-proxy` | Pristup Ollama serveru koji već radi na hostu (Gemma 4 12B) | GPL 2, BSD |
+| `ollama-init` | Jednokratno preuzima model i pravi varijantu `gemma4-kc` sa kontekstom 16k | MIT |
 | `embed`, `rerank` | BGE-M3 i bge-reranker-v2-m3 na CPU (Text Embeddings Inference) | MIT, Apache 2.0 |
 | `imagegen` | FLUX.2 klein 4B za AI pozadine objava | Apache 2.0 |
-| `mailpit` | Prikaz poslatih odgovora (umesto pravog SMTP-a) | MIT |
-| `langfuse-*`, `clickhouse`, `minio`, `redis` | Langfuse, tragovi i kvalitet AI poziva (port `LANGFUSE_PORT`, podrazumevano 3001) | MIT |
+| `mailpit` | Prikaz poslatih odgovora (umesto pravog SMTP-a), na putanji `/mailpit/` | MIT |
 
-Na kartici L4 (24 GB) jezički model i model za slike dele GPU: vLLM zauzima oko polovine memorije, a model za slike se drži u RAM-u i komponente prebacuje na GPU samo tokom generisanja.
+Opcioni profili, isključeni na deljenom serveru: `vllm` (sopstveni vLLM umesto Ollama) i `langfuse` (sopstveni Langfuse sa ClickHouse, MinIO i Redis).
 
-## Zahtevi servera
+## Rad na deljenom serveru
 
-- Linux, Docker sa Compose dodatkom
-- NVIDIA drajver i NVIDIA Container Toolkit (`docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi` mora da radi)
-- 32 GB RAM ili više, 120 GB slobodnog diska za modele i slike
-- Izlaz na internet pri prvom pokretanju (preuzimanje modela sa Hugging Face-a i Docker slika)
+Podrazumevana podešavanja su napravljena tako da demo ne smeta projektima koji već rade na serveru:
+
+- **Portovi**: spolja se otvara samo `WEB_PORT` (8090). Baza, AI servisi i Mailpit nemaju objavljene portove. Workflow pre pokretanja proverava da port nije zauzet.
+- **Imena**: Compose projekat se zove `putevi-kc`, pa su kontejneri, mreža i volumeni odvojeni od ostalih (`putevi-kc-api-1` i slično).
+- **Jezički model**: koristi se postojeća Ollama na hostu (127.0.0.1:11434), na isti način kao u drugim projektima (socat i nginx). `ollama-init` preuzima `gemma4:12b` samo ako ga nema i pravi `gemma4-kc`. Modeli drugih projekata se ne menjaju. Gemma 4 zahteva Ollama 0.20 ili noviju (`ollama --version`).
+- **GPU**: Ollama deli karticu između projekata i model izbacuje iz memorije posle neaktivnosti (podešavanje `OLLAMA_KEEP_ALIVE` na hostu), pa prvi AI poziv posle pauze traje desetak sekundi duže. Model za slike prebacuje komponente na GPU samo tokom generisanja i treba mu oko 9 GB slobodne GPU memorije u tom trenutku. Ako je kartica zauzeta, postaviti `IMAGEGEN_OFFLOAD=sequential` (sporije, oko 2 GB).
+- **RAM**: model za slike zauzima oko 16 GB RAM-a dok je učitan i posle 15 minuta bez upotrebe se izbacuje (`IMAGEGEN_IDLE_UNLOAD_MIN`). Embedding i reranker zauzimaju oko 5 GB i ograničeni su na 4 jezgra po servisu (`TEI_CPUS`).
+- **Disk**: oko 45 GB (Docker slike oko 15 GB, modeli za embedding i slike oko 20 GB, Gemma 4 u Ollama oko 7 GB).
+- **Langfuse**: tragovi idu u postojeći Langfuse na hostu (port 3000), u poseban projekat. Bez ključeva aplikacija radi normalno, samo bez tragova.
 
 ## Deploy preko GitHub Actions
 
-1. Na demo serveru registrovati self-hosted runner za ovaj repozitorijum. Korisnik pod kojim radi runner mora biti u grupi `docker`.
-2. U `.github/workflows/deploy.yml` proveriti labelu u `runs-on` (podrazumevano `[self-hosted, linux]`).
-3. U podešavanjima repozitorijuma (Settings, Secrets and variables, Actions) po potrebi dodati:
-   - promenljivu `DEMO_HOST`: IP adresa ili domen servera kako ga vide korisnici
-   - promenljivu `WEB_PORT`: port aplikacije (podrazumevano 8080)
-   - promenljivu `CONFIG_DIR`: gde se čuva `.env` na serveru (podrazumevano `~/kc-demo-config`)
-   - tajnu `HF_TOKEN`: samo ako neki model na Hugging Face-u zahteva prihvatanje uslova
-4. Push na `main` pokreće build i deploy. Pri prvom pokretanju workflow pravi `.env` sa nasumičnim lozinkama.
+### 1. Runner na serveru
+
+Runner registrovan za drugi repozitorijum na ličnom GitHub nalogu ne može da preuzima poslove ovog repozitorijuma, pa se na istom serveru pravi još jedna instanca runnera, u posebnom direktorijumu i kao poseban servis. Postojeći runner se ne dira.
+
+1. GitHub, ovaj repozitorijum, Settings, Actions, Runners, **New self-hosted runner**, Linux x64. Stranica prikazuje komande sa aktuelnom verzijom i jednokratnim tokenom (važi sat vremena).
+2. Na serveru, kao isti korisnik pod kojim radi postojeći runner (mora biti u grupi `docker`):
+   ```bash
+   mkdir -p ~/actions-runner-putevi && cd ~/actions-runner-putevi
+   # komande "Download" sa GitHub stranice (curl ... i tar xzf ...)
+   ./config.sh --url https://github.com/OgnjenSirar/AI-putevi-Srbije \
+     --token TOKEN_SA_STRANICE --name putevi-demo --labels putevi-demo \
+     --work _work --unattended
+   sudo ./svc.sh install $USER
+   sudo ./svc.sh start
+   sudo ./svc.sh status
+   ```
+3. Runner se pojavljuje u Settings, Actions, Runners kao `putevi-demo` sa statusom Idle. Workflow ga bira po labeli `putevi-demo`.
+
+### 2. Podešavanja repozitorijuma
+
+Settings, Secrets and variables, Actions:
+
+| Vrsta | Naziv | Vrednost |
+|---|---|---|
+| Variable | `DEMO_HOST` | javna IP adresa ili domen servera |
+| Variable | `WEB_PORT` | `8090` (ili drugi slobodan port) |
+| Variable | `LANGFUSE_UI_URL` | `http://DEMO_HOST:3000/project/ID_PROJEKTA/traces` |
+| Secret | `LANGFUSE_PUBLIC_KEY` | `pk-lf-...` iz novog Langfuse projekta |
+| Secret | `LANGFUSE_SECRET_KEY` | `sk-lf-...` iz novog Langfuse projekta |
+| Secret | `HF_TOKEN` | samo ako neki model na Hugging Face-u zahteva prihvatanje uslova |
+| Variable | `OLLAMA_BASE_MODEL` | opciono, ako se koristi drugi model iz Ollama (podrazumevano `gemma4:12b`) |
+| Variable | `CONFIG_DIR` | opciono, gde se čuva `.env` na serveru (podrazumevano `~/putevi-kc-config`) |
+
+Langfuse ključevi: u postojećem Langfuse-u napraviti projekat (npr. `putevi-demo`), pa u njemu Settings, API Keys, Create new API keys. ID projekta se vidi u adresi stranice projekta.
+
+### 3. Pokretanje
+
+Push na `main` pokreće build i deploy. Pri prvom pokretanju workflow pravi `.env` sa nasumičnim lozinkama i preuzima modele (prvi deploy traje 20 do 40 minuta, sledeći nekoliko minuta). Port `WEB_PORT` treba otvoriti u firewall-u servera (security group).
 
 Ručno pokretanje workflow-a (Actions, Deploy demo, Run workflow) nudi i opciju vraćanja demo baze na početno stanje.
 
@@ -45,9 +80,10 @@ Ručno pokretanje workflow-a (Actions, Deploy demo, Run workflow) nudi i opciju 
 cp .env.example .env        # promeniti DEMO_HOST i lozinke
 docker compose --env-file .env up -d --build
 docker compose ps
+docker compose logs ollama-init
 ```
 
-Bez GPU-a (samo za pregled interfejsa): u `.env` postaviti `AI_MODE=mock` i pokrenuti bez AI servisa:
+Bez GPU-a i bez Ollama (samo za pregled interfejsa): u `.env` postaviti `AI_MODE=mock` i pokrenuti bez AI servisa:
 
 ```bash
 docker compose --env-file .env up -d --build db api worker web mailpit
@@ -57,9 +93,9 @@ docker compose --env-file .env up -d --build db api worker web mailpit
 
 | Šta | Adresa |
 |---|---|
-| Aplikacija | `http://DEMO_HOST:8080` |
-| Poslati odgovori (Mailpit) | `http://DEMO_HOST:8080/mailpit/` |
-| Langfuse | `http://DEMO_HOST:3001`, nalog iz `.env` (`LANGFUSE_INIT_USER_EMAIL` i `LANGFUSE_INIT_USER_PASSWORD`) |
+| Aplikacija | `http://DEMO_HOST:8090` |
+| Poslati odgovori (Mailpit) | `http://DEMO_HOST:8090/mailpit/` |
+| Langfuse | postojeći Langfuse na serveru, projekat napravljen za demo (link i u Administraciji) |
 
 Demo nalozi (lozinka za sve je `demo`): `jasmina` (supervizor), `ivana` (operater KC), `petar` (ENP), `mina` (FIN), `uros` (NAP), `lazar` (ODR), `tijana` (PRA), `nevena` (KOM), `admin`.
 
@@ -86,8 +122,10 @@ Demo nalozi (lozinka za sve je `demo`): `jasmina` (supervizor), `ivana` (operate
 
 ## Rešavanje problema
 
-- **vLLM ne podiže model** (`docker compose logs llm`): proveriti verziju vLLM slike (`VLLM_IMAGE`) i model (`LLM_MODEL_ID`). Alternativa je Ollama: `docker compose stop llm`, zatim `docker compose --profile ollama up -d ollama`, a u `.env` postaviti `LLM_BASE_URL=http://ollama:11434/v1` i `LLM_SERVED_NAME=gemma4:12b`, pa ponovo pokrenuti `api` i `worker`.
-- **Nedovoljno GPU memorije pri generisanju slika**: smanjiti `VLLM_GPU_UTIL` na 0.45 ili postaviti `IMAGEGEN_OFFLOAD=sequential` (sporije, ali troši najmanje memorije).
+- **AI ne radi, Administracija prikazuje jezički model kao nedostupan**: `docker compose -p putevi-kc logs ollama-init`. Najčešći uzroci su stara verzija Ollama na hostu (Gemma 4 traži 0.20 ili noviju) ili Ollama koja ne radi (`systemctl status ollama`, `curl 127.0.0.1:11434/api/version`). Ako se Ollama ne može ažurirati, u `OLLAMA_BASE_MODEL` upisati model koji već postoji na serveru (`ollama list`), npr. `gemma3:12b`.
+- **Odgovori su spori**: drugi projekti istovremeno koriste istu Ollama i GPU. Ollama obrađuje zahteve redom, pa se vreme odgovora produžava dok drugi projekat radi.
+- **Nedovoljno GPU memorije pri generisanju slika**: postaviti `IMAGEGEN_OFFLOAD=sequential` (sporije, ali troši najmanje memorije).
+- **Sopstveni vLLM umesto Ollama** (samo ako GPU nije deljen): `docker compose --profile vllm up -d llm`, a u `.env` postaviti `LLM_BASE_URL=http://llm:8000/v1` i `LLM_SERVED_NAME=gemma-4`.
 - **Model zahteva prihvatanje uslova na Hugging Face-u**: prihvatiti uslove na stranici modela i dodati `HF_TOKEN`.
 - **AI je u rezervnom režimu**: dok se modeli preuzimaju, radnik čeka do sat vremena pre nego što obradi mejlove pravilima. Stanje servisa se vidi u Administraciji. Svaki predmet se može ponovo analizirati dugmetom „Nova AI analiza”.
 

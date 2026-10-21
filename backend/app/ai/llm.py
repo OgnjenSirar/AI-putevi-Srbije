@@ -50,11 +50,21 @@ def llm_healthy(force: bool = False) -> bool:
     ok = False
     try:
         r = httpx.get(settings.llm_base_url.rstrip("/") + "/models", timeout=3)
-        ok = r.status_code == 200
+        if r.status_code == 200:
+            ids = [m.get("id", "") for m in (r.json().get("data") or [])]
+            # Server radi, ali model mora biti ucitan ili preuzet (Ollama: "ollama pull")
+            ok = any(i == settings.llm_model or i.split(":")[0] == settings.llm_model for i in ids)
     except Exception:
         ok = False
     _health_cache.update(t=now, ok=ok)
     return ok
+
+
+def _is_ollama() -> bool:
+    if settings.llm_backend in ("ollama", "vllm"):
+        return settings.llm_backend == "ollama"
+    u = settings.llm_base_url.lower()
+    return "ollama" in u or ":11434" in u
 
 
 def effective_mode() -> str:
@@ -113,8 +123,12 @@ def chat_json(feature: str, messages: list[dict], schema: dict, mock_fn: Callabl
         temperature=temperature,
         max_tokens=max_tokens or settings.llm_max_tokens,
         response_format={"type": "json_schema", "json_schema": {"name": feature, "schema": schema, "strict": True}},
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
+    # Iskljuci "thinking" rezim Gemma 4 radi brzine: vLLM kroz chat sablon, Ollama kroz reasoning_effort
+    if _is_ollama():
+        kwargs["extra_body"] = {"reasoning_effort": "none"}
+    else:
+        kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     if _langfuse_enabled:
         kwargs["name"] = trace_name or feature
     try:
@@ -123,6 +137,7 @@ def chat_json(feature: str, messages: list[dict], schema: dict, mock_fn: Callabl
         # Neki serveri ne podrzavaju json_schema, pokusaj sa json_object pa slobodnim tekstom
         log.warning("json_schema nije uspeo (%s), pokusavam bez seme", e)
         kwargs.pop("response_format", None)
+        kwargs.pop("extra_body", None)
         kwargs["messages"] = messages + [{"role": "user", "content": "Odgovori ISKLJUČIVO validnim JSON objektom prema šemi: " + json.dumps(schema, ensure_ascii=False)}]
         try:
             resp = client.chat.completions.create(**kwargs)

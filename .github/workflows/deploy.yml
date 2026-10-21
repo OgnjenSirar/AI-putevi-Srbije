@@ -11,17 +11,17 @@ on:
         default: false
 
 concurrency:
-  group: deploy-demo
+  group: deploy-putevi-kc
   cancel-in-progress: false
 
 env:
-  COMPOSE_PROJECT_NAME: kc-demo
+  COMPOSE_PROJECT_NAME: putevi-kc
 
 jobs:
   deploy:
-    # Promeniti labelu ako runner na demo serveru ima drugu (npr. [self-hosted, demo])
-    runs-on: [self-hosted, linux]
-    timeout-minutes: 90
+    # Labela runnera registrovanog za ovaj repozitorijum na demo serveru
+    runs-on: [self-hosted, putevi-demo]
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -29,39 +29,75 @@ jobs:
         run: |
           # Trajna konfiguracija na serveru, van radnog direktorijuma runnera
           CFG="${{ vars.CONFIG_DIR }}"
-          echo "CONFIG_DIR=${CFG:-$HOME/kc-demo-config}" >> "$GITHUB_ENV"
+          echo "CONFIG_DIR=${CFG:-$HOME/putevi-kc-config}" >> "$GITHUB_ENV"
           docker version --format 'Docker {{.Server.Version}}'
           docker compose version
-          if command -v nvidia-smi >/dev/null; then nvidia-smi --query-gpu=name,memory.total --format=csv; else echo "UPOZORENJE: nvidia-smi nije pronadjen"; fi
+          if command -v nvidia-smi >/dev/null; then
+            nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
+          else
+            echo "UPOZORENJE: nvidia-smi nije pronadjen"
+          fi
+          if curl -fsS --max-time 5 http://127.0.0.1:11434/api/version; then
+            echo
+          else
+            echo "UPOZORENJE: Ollama ne odgovara na 127.0.0.1:11434, AI ce raditi u rezervnom rezimu"
+          fi
+          df -h / | tail -1
 
-      - name: Priprema .env (samo pri prvom deploy-u)
+      - name: Priprema .env
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           DEMO_HOST: ${{ vars.DEMO_HOST }}
           WEB_PORT: ${{ vars.WEB_PORT }}
+          OLLAMA_BASE_MODEL: ${{ vars.OLLAMA_BASE_MODEL }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_UI_URL: ${{ vars.LANGFUSE_UI_URL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           mkdir -p "$CONFIG_DIR"
-          if [ ! -f "$CONFIG_DIR/.env" ]; then
-            cp .env.example "$CONFIG_DIR/.env"
+          ENVF="$CONFIG_DIR/.env"
+          set_env() {  # postavi ili dodaj KLJUC=vrednost
+            if grep -q "^$1=" "$ENVF"; then sed -i "s|^$1=.*|$1=$2|" "$ENVF"; else echo "$1=$2" >> "$ENVF"; fi
+          }
+          if [ ! -f "$ENVF" ]; then
+            cp .env.example "$ENVF"
             rnd() { openssl rand -hex "$1"; }
-            sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(rnd 16)/" "$CONFIG_DIR/.env"
-            sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$(rnd 32)/" "$CONFIG_DIR/.env"
-            sed -i "s/^LANGFUSE_NEXTAUTH_SECRET=.*/LANGFUSE_NEXTAUTH_SECRET=$(rnd 32)/" "$CONFIG_DIR/.env"
-            sed -i "s/^LANGFUSE_SALT=.*/LANGFUSE_SALT=$(rnd 16)/" "$CONFIG_DIR/.env"
-            sed -i "s/^LANGFUSE_ENCRYPTION_KEY=.*/LANGFUSE_ENCRYPTION_KEY=$(rnd 32)/" "$CONFIG_DIR/.env"
-            sed -i "s/^LANGFUSE_SECRET_KEY=.*/LANGFUSE_SECRET_KEY=sk-lf-$(rnd 16)/" "$CONFIG_DIR/.env"
-            sed -i "s/^LANGFUSE_INIT_USER_PASSWORD=.*/LANGFUSE_INIT_USER_PASSWORD=$(rnd 8)/" "$CONFIG_DIR/.env"
-            sed -i "s/^CLICKHOUSE_PASSWORD=.*/CLICKHOUSE_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
-            sed -i "s/^MINIO_PASSWORD=.*/MINIO_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
-            sed -i "s/^REDIS_PASSWORD=.*/REDIS_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
-            echo "Napravljen $CONFIG_DIR/.env sa nasumicnim lozinkama"
+            set_env POSTGRES_PASSWORD "$(rnd 16)"
+            set_env SECRET_KEY "$(rnd 32)"
+            set_env LANGFUSE_NEXTAUTH_SECRET "$(rnd 32)"
+            set_env LANGFUSE_SALT "$(rnd 16)"
+            set_env LANGFUSE_ENCRYPTION_KEY "$(rnd 32)"
+            set_env LANGFUSE_INIT_USER_PASSWORD "$(rnd 8)"
+            set_env CLICKHOUSE_PASSWORD "$(rnd 12)"
+            set_env MINIO_PASSWORD "$(rnd 12)"
+            set_env REDIS_PASSWORD "$(rnd 12)"
+            echo "Napravljen $ENVF sa nasumicnim lozinkama"
           fi
+          # Kljucevi koji nedostaju u starijem .env dobijaju vrednost iz .env.example
+          grep -E '^[A-Z_]+=' .env.example | while IFS= read -r line; do
+            k="${line%%=*}"; grep -q "^$k=" "$ENVF" || echo "$line" >> "$ENVF"
+          done
           # Vrednosti iz GitHub podesavanja uvek imaju prednost
-          [ -n "$HF_TOKEN" ] && sed -i "s/^HF_TOKEN=.*/HF_TOKEN=$HF_TOKEN/" "$CONFIG_DIR/.env"
-          [ -n "$DEMO_HOST" ] && sed -i "s/^DEMO_HOST=.*/DEMO_HOST=$DEMO_HOST/" "$CONFIG_DIR/.env"
-          [ -n "$WEB_PORT" ] && sed -i "s/^WEB_PORT=.*/WEB_PORT=$WEB_PORT/" "$CONFIG_DIR/.env"
-          chmod 600 "$CONFIG_DIR/.env"
-          grep -E '^(DEMO_HOST|WEB_PORT|LANGFUSE_PORT|AI_MODE|LLM_MODEL_ID)=' "$CONFIG_DIR/.env"
+          for k in HF_TOKEN DEMO_HOST WEB_PORT OLLAMA_BASE_MODEL LANGFUSE_HOST LANGFUSE_UI_URL LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY; do
+            v="${!k}"
+            [ -n "$v" ] && set_env "$k" "$v"
+          done
+          chmod 600 "$ENVF"
+          grep -E '^(DEMO_HOST|WEB_PORT|AI_MODE|LLM_BASE_URL|LLM_SERVED_NAME|OLLAMA_BASE_MODEL|LANGFUSE_HOST)=' "$ENVF"
+          if grep -q '^LANGFUSE_PUBLIC_KEY=.\+' "$ENVF"; then echo "Langfuse tragovi: ukljuceni"; else echo "Langfuse tragovi: iskljuceni (nema kljuceva)"; fi
+
+      - name: Provera porta
+        run: |
+          PORT=$(grep -E '^WEB_PORT=' "$CONFIG_DIR/.env" | cut -d= -f2)
+          PORT=${PORT:-8090}
+          OURS=$(docker compose --env-file "$CONFIG_DIR/.env" ps -q web 2>/dev/null || true)
+          if [ -z "$OURS" ] && ss -ltnH "sport = :$PORT" | grep -q .; then
+            echo "GRESKA: port $PORT je vec zauzet na serveru (drugi projekat). Promeniti promenljivu WEB_PORT."
+            ss -ltnp "sport = :$PORT" || true
+            exit 1
+          fi
+          echo "Port $PORT je slobodan ili ga vec koristi ovaj projekat"
 
       - name: Build
         run: docker compose --env-file "$CONFIG_DIR/.env" build --pull
@@ -73,11 +109,20 @@ jobs:
         run: |
           PORT=$(grep -E '^WEB_PORT=' "$CONFIG_DIR/.env" | cut -d= -f2)
           for i in $(seq 1 60); do
-            if curl -fsS "http://localhost:${PORT:-8080}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
+            if curl -fsS "http://localhost:${PORT:-8090}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
             sleep 5
           done
           docker compose --env-file "$CONFIG_DIR/.env" logs --tail=80 api worker web
           exit 1
+
+      - name: Priprema jezickog modela u Ollama
+        timeout-minutes: 45
+        run: |
+          # ollama-init preuzima model jednom (nekoliko GB), sledeci deploy-i traju par sekundi
+          CID=$(docker compose --env-file "$CONFIG_DIR/.env" ps -aq ollama-init)
+          while [ "$(docker inspect -f '{{.State.Status}}' "$CID")" = "running" ]; do sleep 10; done
+          docker logs "$CID"
+          exit "$(docker inspect -f '{{.State.ExitCode}}' "$CID")"
 
       - name: Reset demo baze
         if: ${{ github.event.inputs.reset_demo == 'true' }}
@@ -88,9 +133,9 @@ jobs:
         if: always()
         run: |
           docker compose --env-file "$CONFIG_DIR/.env" ps
-          echo "Modeli se pri prvom pokretanju preuzimaju sa Hugging Face-a (vise GB), pa vLLM i servis za slike mogu biti spremni tek posle nekoliko minuta."
-          echo "Do tada aplikacija radi u rezervnom rezimu i automatski prelazi na pravi model kada postane dostupan."
+          echo "Embedding, reranker i model za slike se pri prvom pokretanju preuzimaju sa Hugging Face-a (oko 20 GB),"
+          echo "pa mogu biti spremni tek posle nekoliko minuta. Stanje se vidi u aplikaciji, Administracija, Stanje sistema."
 
-      - name: Ciscenje starih slika
+      - name: Ciscenje starih slika ovog projekta
         if: success()
-        run: docker image prune -f
+        run: docker image prune -f --filter "label=com.docker.compose.project=putevi-kc"

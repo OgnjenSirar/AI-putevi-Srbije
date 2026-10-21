@@ -44,7 +44,7 @@ def status(db: Session = Depends(get_db), user: User = Depends(current_user)):
         "services": {
             "llm": llm.llm_healthy(force=True), "embed": embeddings_available(), "rerank": reranker_available(),
             "imagegen": imagegen_status().get("status") == "ok", "imagegen_detail": imagegen_status(),
-            "langfuse": bool(settings.langfuse_host) and ping(settings.langfuse_host.rstrip("/") + "/api/public/health"),
+            "langfuse": bool(settings.langfuse_host and settings.langfuse_public_key and settings.langfuse_secret_key) and ping(settings.langfuse_host.rstrip("/") + "/api/public/health"),
             "smtp": smtp_ok,
         },
         "jobs": jobs, "langfuse_ui": settings.langfuse_ui_url, "mailpit_ui": "/mailpit/",

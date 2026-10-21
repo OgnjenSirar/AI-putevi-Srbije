@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://llm:8000/v1"
     llm_api_key: str = "demo"
     llm_model: str = "gemma-4"
+    # "auto" prepoznaje Ollama po adresi, moze se zadati i "ollama" ili "vllm"
+    llm_backend: str = "auto"
     llm_timeout: float = 180.0
     llm_max_tokens: int = 1200
     # Ako LLM nije dostupan, automatski predji na mock da demo ne stane.
