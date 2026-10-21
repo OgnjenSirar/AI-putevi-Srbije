@@ -50,7 +50,7 @@ jobs:
             # Modeli na serveru i trenutno ucitani u GPU (zajednicka Ollama za sve projekte)
             curl -fsS --max-time 5 http://127.0.0.1:11434/api/tags | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ' | sed 's/^/Modeli: /' | tee -a pre.log
             echo | tee -a pre.log
-            curl -fsS --max-time 5 http://127.0.0.1:11434/api/ps | grep -oE '"name":"[^"]*"|"size_vram":[0-9]+' | paste - - | sed -E 's/"name":"([^"]*)"\s+"size_vram":([0-9]+)/\1 \2/' | awk '{printf "Ucitano: %s %.1f GB VRAM\n", $1, $2/1e9}' | tee -a pre.log
+            curl -fsS --max-time 5 http://127.0.0.1:11434/api/ps | grep -oE '"name":"[^"]*"|"size_vram":[0-9]+' | paste - - | sed -E 's/"name":"([^"]*)"[[:space:]]+"size_vram":([0-9]+)/\1 \2/' | awk '{printf "Ucitano: %s %.1f GB VRAM\n", $1, $2/1e9}' | tee -a pre.log
           else
             echo "Ollama ne odgovara na 127.0.0.1:11434, AI ce raditi u rezervnom rezimu" | tee -a pre.log
           fi
@@ -157,10 +157,22 @@ jobs:
           docker logs "$CID" > init.log 2>&1
           cat init.log
           CODE=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
-          if [ "$CODE" = "0" ]; then bash deploy/gh-annotate.sh notice "Ollama model" init.log 6
+          if [ "$CODE" = "0" ]; then bash deploy/gh-annotate.sh notice "Ollama model" init.log 12
           else bash deploy/gh-annotate.sh error "Ollama model" init.log 20
           fi
           exit "$CODE"
+
+      - name: Provera AI obrade
+        run: |
+          # Radnik posle starta obradjuje pocetnu postu preko modela, ovde se vidi da li ide "live"
+          sleep 90
+          docker compose --env-file "$CONFIG_DIR/.env" exec -T db psql -U demo -d kcdemo -At -F ' | ' \
+            -c "select 'poslovi', status, count(*) from jobs group by status order by status" \
+            -c "select 'AI pozivi', mode, count(*), round(avg(latency_ms)/1000.0, 1) || ' s prosek', sum(case when ok then 0 else 1 end) || ' gresaka' from ai_calls where at > now() - interval '3 hours' group by mode" \
+            -c "select 'greska', feature, left(error, 200) from ai_calls where not ok and at > now() - interval '3 hours' order by id desc limit 3" \
+            > ai.log 2>&1 || true
+          cat ai.log
+          bash deploy/gh-annotate.sh notice "AI obrada" ai.log 20
 
       - name: Reset demo baze
         if: ${{ github.event.inputs.reset_demo == 'true' }}

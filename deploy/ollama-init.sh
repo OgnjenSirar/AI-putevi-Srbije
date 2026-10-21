@@ -35,3 +35,18 @@ if echo "$resp" | grep -q '"error"'; then
   exit 1
 fi
 echo "Model $MODEL je spreman"
+
+# Kratak test brzine (ujedno ucitava model u memoriju pre prvog pravog zahteva)
+echo "Test brzine..."
+resp=$(curl -sS --max-time 600 $O/api/generate -d "{\"model\":\"$MODEL\",\"prompt\":\"Napiši tri rečenice o elektronskoj naplati putarine.\",\"stream\":false,\"think\":false,\"options\":{\"num_predict\":120}}")
+num() { echo "$resp" | grep -o "\"$1\":[0-9]*" | head -1 | cut -d: -f2; }
+ec=$(num eval_count) ed=$(num eval_duration) ld=$(num load_duration) pc=$(num prompt_eval_count) pd=$(num prompt_eval_duration)
+if [ -n "$ec" ] && [ -n "$ed" ] && [ "$ed" -gt 0 ]; then
+  awk -v ec="$ec" -v ed="$ed" -v ld="${ld:-0}" -v pc="${pc:-0}" -v pd="${pd:-1}" 'BEGIN{
+    printf "Generisanje: %.1f tokena/s (%d tokena)\n", ec/(ed/1e9), ec
+    printf "Obrada upita: %.0f tokena/s (%d tokena)\n", pc/(pd/1e9), pc
+    printf "Ucitavanje modela: %.1f s\n", ld/1e9 }'
+else
+  echo "Test brzine nije uspeo: $(echo "$resp" | head -c 300)"
+fi
+curl -sS $O/api/ps | grep -oE '"name":"[^"]*"|"size":[0-9]+|"size_vram":[0-9]+' | paste - - - | sed -E 's/"name":"([^"]*)"[[:space:]]+"size":([0-9]+)[[:space:]]+"size_vram":([0-9]+)/\1 \2 \3/' | awk '{printf "U memoriji: %s, ukupno %.1f GB, na GPU %.1f GB (%.0f%%)\n", $1, $2/1e9, $3/1e9, ($2>0?100*$3/$2:0)}'
