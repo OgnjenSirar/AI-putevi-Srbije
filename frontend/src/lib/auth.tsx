@@ -41,6 +41,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    // Brise i kolacic sesije kojim nginx stiti slike i Mailpit
+    api.post('/api/auth/logout', {}).catch(() => undefined)
     setToken(null)
     setUser(null)
   }

@@ -8,7 +8,7 @@ Sve komponente su open-source. Svi podaci (korisnici, tablice, TAG brojevi, cene
 
 | Servis | Uloga | Licenca |
 |---|---|---|
-| `web` | React aplikacija i nginx, jedini port otvoren spolja (`WEB_PORT`, podrazumevano 8090) | MIT |
+| `web` | React aplikacija i nginx sa HTTPS-om, jedini port otvoren spolja (`WEB_PORT`, podrazumevano 8090) | MIT |
 | `api`, `worker` | FastAPI aplikacija i pozadinski radnik (obrada pošte, AI) | MIT |
 | `db` | PostgreSQL 16 sa pgvector | PostgreSQL |
 | `ollama-hostfwd`, `ollama-proxy` | Pristup Ollama serveru koji već radi na hostu (Gemma 4 12B) | GPL 2, BSD |
@@ -23,7 +23,7 @@ Servis `imagegen` je u profilu `gpu`, koji workflow sam uključuje kada Docker v
 
 Podrazumevana podešavanja su napravljena tako da demo ne smeta projektima koji već rade na serveru:
 
-- **Portovi**: spolja se otvara samo `WEB_PORT` (8090). Baza, AI servisi i Mailpit nemaju objavljene portove. Workflow pre pokretanja proverava da port nije zauzet.
+- **Portovi**: spolja se otvara samo `WEB_PORT` (8090, HTTPS). Baza, AI servisi i Mailpit nemaju objavljene portove. Workflow pre pokretanja proverava da port nije zauzet.
 - **Imena**: Compose projekat se zove `putevi-kc`, pa su kontejneri, mreža i volumeni odvojeni od ostalih (`putevi-kc-api-1` i slično).
 - **Jezički model**: koristi se postojeća Ollama na hostu (127.0.0.1:11434), na isti način kao u drugim projektima (socat i nginx). `ollama-init` preuzima `gemma4:12b` samo ako ga nema i pravi `gemma4-kc`. Modeli drugih projekata se ne menjaju. Gemma 4 zahteva Ollama 0.20 ili noviju (`ollama --version`).
 - **GPU**: Ollama deli karticu između projekata i model izbacuje iz memorije posle neaktivnosti (podešavanje `OLLAMA_KEEP_ALIVE` na hostu), pa prvi AI poziv posle pauze traje desetak sekundi duže. Model za slike prebacuje komponente na GPU samo tokom generisanja i treba mu oko 9 GB slobodne GPU memorije u tom trenutku. Ako je kartica zauzeta, postaviti `IMAGEGEN_OFFLOAD=sequential` (sporije, oko 2 GB).
@@ -57,7 +57,9 @@ Settings, Secrets and variables, Actions:
 
 | Vrsta | Naziv | Vrednost |
 |---|---|---|
-| Variable | `DEMO_HOST` | javna IP adresa ili domen servera |
+| Variable | `DEMO_HOST` | opciono, javna IP adresa ili domen (ako nije zadata, workflow je sam određuje) |
+| Secret | `DEMO_PASSWORD` | opciono, lozinka demo naloga (najmanje 10 znakova) |
+| Secret | `ADMIN_PASSWORD` | opciono, lozinka naloga `admin` |
 | Variable | `WEB_PORT` | `8090` (ili drugi slobodan port) |
 | Variable | `LANGFUSE_UI_URL` | `http://DEMO_HOST:3000/project/ID_PROJEKTA/traces` |
 | Secret | `LANGFUSE_PUBLIC_KEY` | `pk-lf-...` iz novog Langfuse projekta |
@@ -90,19 +92,30 @@ Bez GPU-a i bez Ollama (samo za pregled interfejsa): u `.env` postaviti `AI_MODE
 docker compose --env-file .env up -d --build db api worker web mailpit
 ```
 
-## Pristup
+## Pristup i zaštita
 
 | Šta | Adresa |
 |---|---|
-| Aplikacija | `http://DEMO_HOST:8090` |
-| Poslati odgovori (Mailpit) | `http://DEMO_HOST:8090/mailpit/` |
+| Aplikacija | `https://DEMO_HOST:8090` |
+| Poslati odgovori (Mailpit) | `https://DEMO_HOST:8090/mailpit/` (samo za prijavljene) |
 | Langfuse | postojeći Langfuse na serveru, projekat napravljen za demo (link i u Administraciji) |
 
-Demo nalozi (lozinka za sve je `demo`): `jasmina` (supervizor), `ivana` (operater KC), `petar` (ENP), `mina` (FIN), `uros` (NAP), `lazar` (ODR), `tijana` (PRA), `nevena` (KOM), `admin`.
+Demo je na javnoj adresi, pa je zaštićen ovako:
+
+- **HTTPS**: nginx pri prvom startu pravi self-signed sertifikat za `DEMO_HOST` (volumen `web-certs`, važi 825 dana). Pregledač prikazuje upozorenje jer sertifikat nije izdao poznati izdavalac, što je očekivano za demo. Zahtev preko `http://` se preusmerava na `https://`. Za pravi sertifikat: kopirati `server.crt` i `server.key` u volumen `web-certs` i napraviti u njemu prazan fajl `.sopstveni`.
+- **Prijava**: bez naloga nije dostupno ništa osim ekrana za prijavu. API traži token, a slike i Mailpit nginx pušta tek posle provere sesije. Lozinke se čuvaju kao PBKDF2 heš.
+- **Lozinke**: demo nalozi (`jasmina` supervizor, `ivana` operater KC, `petar` ENP, `mina` FIN, `uros` NAP, `lazar` ODR, `tijana` PRA, `nevena` KOM) koriste `DEMO_PASSWORD`, a nalog `admin` koristi `ADMIN_PASSWORD`. Obe se zadaju kao GitHub tajne ili ih workflow pri prvom deploy-u pravi nasumično i čuva samo u `.env` na serveru:
+  ```bash
+  grep -E '^(DEMO|ADMIN)_PASSWORD=' ~/putevi-kc-config/.env
+  ```
+  Lozinke ovih naloga se postavljaju pri svakom startu, pa se menjaju kroz tajne ili `.env`, ne kroz aplikaciju.
+- **Lični nalozi**: admin u Administraciji, Nalozi, pravi naloge za kolege ili klijenta (lozinka najmanje 10 znakova). Ti nalozi se ne menjaju pri deploy-u.
+- **Ograničenja**: najviše 10 pokušaja prijave u minuti po IP adresi, API dokumentacija je isključena, baza i AI servisi nisu dostupni spolja.
+- **Logovi**: repozitorijum je javan, pa workflow ne ispisuje ni adresu servera ni lozinke. Posle svakog deploy-a proverava da bez prijave nema pristupa (napomena „Zastita pristupa” uz run).
 
 ## Predlog scenarija za prezentaciju
 
-1. Prijava kao `jasmina`. U listi predmeta su obraćanja razvrstana po prioritetu i roku. Isprekidana linija označava AI predlog rasporeda, puna linija potvrđen raspored.
+1. Prijava kao `jasmina` (lozinka iz `DEMO_PASSWORD`). U listi predmeta su obraćanja razvrstana po prioritetu i roku. Isprekidana linija označava AI predlog rasporeda, puna linija potvrđen raspored.
 2. Otvoriti predmet „TAG nije očitan na naplatnoj stanici Vrčin”: prepiska, AI razvrstavanje sa obrazloženjem, provera u naplatnom sistemu sa izdvojenim tablicama i TAG brojem, predlog odgovora sa oznakom `[PROVERA]`.
 3. Uneti rezultat provere, zameniti oznaku u tekstu, poslati odgovor. Sistem beleži koliko je predlog izmenjen. Odgovor se vidi u Mailpit-u, sa očuvanom prepiskom.
 4. Predmet „POSLEDNJI PUT VAS UPOZORAVAM”: pravilo za pretnje podiže prioritet nezavisno od modela.

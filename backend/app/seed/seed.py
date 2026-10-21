@@ -2,6 +2,7 @@
 ili iz administracije ("Resetuj demo")."""
 import logging
 import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -10,16 +11,47 @@ from sqlalchemy.orm import Session
 
 from ..ai.text_utils import clean_email_body, detect_script
 from ..ai.validator import edit_metrics, render
+from ..config import get_settings
 from ..db import Base, engine
 from ..models import (
     AICall, AISuggestion, AuditLog, Case, CaseEvent, Codebook, Customer, Email, Job, KBTemplate,
     KBTemplateVersion, KBVariable, KBVariableVersion, OrgUnit, PhoneContact, Setting, User, Vehicle,
 )
-from ..security import hash_password
+from ..security import hash_password, verify_password
 from . import catalog, emails, people
 
 log = logging.getLogger("seed")
+settings = get_settings()
 UTC = timezone.utc
+
+
+def managed_password(username: str) -> str:
+    """Lozinka naloga iz pocetnih podataka: iz .env, a ako nije zadata, nasumicna (nalog je tada zakljucan)."""
+    pw = settings.admin_password if username == "admin" else settings.demo_password
+    return pw or secrets.token_urlsafe(24)
+
+
+def apply_managed_passwords(db) -> int:
+    """Postavlja lozinke naloga iz pocetnih podataka prema .env (DEMO_PASSWORD i ADMIN_PASSWORD).
+    Nalozi koje admin napravi u aplikaciji se ne diraju."""
+    changed = 0
+    managed = {u for u, *_ in catalog.USERS}
+    for u in db.scalars(select(User).where(User.username.in_(managed))).all():
+        target = settings.admin_password if u.username == "admin" else settings.demo_password
+        if target and not verify_password(target, u.password_hash):
+            u.password_hash = hash_password(target)
+            changed += 1
+        elif not target and verify_password("demo", u.password_hash):
+            # Stara javno poznata lozinka se ne sme zadrzati na javnoj adresi
+            u.password_hash = hash_password(secrets.token_urlsafe(24))
+            changed += 1
+    # I nalozi napravljeni u aplikaciji sa starom podrazumevanom lozinkom "demo" se zakljucavaju
+    for u in db.scalars(select(User).where(User.username.not_in(managed))).all():
+        if verify_password("demo", u.password_hash):
+            u.password_hash = hash_password(secrets.token_urlsafe(24))
+            changed += 1
+    db.commit()
+    return changed
 
 
 def is_seeded(db: Session) -> bool:
@@ -49,7 +81,7 @@ def seed_all(db: Session, process_inbox: bool = True) -> dict:
     users = {}
     for username, name, role, unit in catalog.USERS:
         u = User(username=username, full_name=name, role=role, org_unit_id=units[unit].id if unit else None,
-                 password_hash=hash_password("demo"))
+                 password_hash=hash_password(managed_password(username)))
         db.add(u)
         users[username] = u
     for i, (code, label, data) in enumerate(catalog.PRIORITIES):

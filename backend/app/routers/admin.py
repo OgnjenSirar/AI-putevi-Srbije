@@ -16,7 +16,7 @@ from ..ai.retrieval import embeddings_available, reranker_available
 from ..config import get_settings
 from ..db import SessionLocal, get_db
 from ..models import AuditLog, Codebook, Email, Job, OrgUnit, Setting, User
-from ..security import current_user, hash_password, require_role
+from ..security import current_user, hash_password, password_problem, require_role
 from ..seed.emails import POOL
 from ..social.service import imagegen_status
 
@@ -70,10 +70,12 @@ def users(db: Session = Depends(get_db), user: User = Depends(current_user)):
 
 @router.post("/users")
 def create_user(body: UserIn, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
-    if db.scalar(select(User).where(User.username == body.username)):
+    if db.scalar(select(User).where(User.username == body.username.strip().lower())):
         raise HTTPException(400, "Korisničko ime je zauzeto")
-    u = User(username=body.username.lower(), full_name=body.full_name, role=body.role, org_unit_id=body.org_unit_id,
-             active=body.active, password_hash=hash_password(body.password or "demo"))
+    if problem := password_problem(body.password):
+        raise HTTPException(400, problem)
+    u = User(username=body.username.strip().lower(), full_name=body.full_name, role=body.role, org_unit_id=body.org_unit_id,
+             active=body.active, password_hash=hash_password(body.password))
     db.add(u)
     db.add(AuditLog(actor=user.full_name, entity="nalog", entity_id=body.username, action="kreiranje", summary=f"Novi nalog {body.full_name} ({body.role})"))
     db.commit()
@@ -88,6 +90,8 @@ def update_user(uid: int, body: UserIn, db: Session = Depends(get_db), user: Use
     diff = {k: {"pre": getattr(u, k), "posle": getattr(body, k)} for k in ("full_name", "role", "org_unit_id", "active") if getattr(u, k) != getattr(body, k)}
     u.full_name, u.role, u.org_unit_id, u.active = body.full_name, body.role, body.org_unit_id, body.active
     if body.password:
+        if problem := password_problem(body.password):
+            raise HTTPException(400, problem)
         u.password_hash = hash_password(body.password)
     if diff:
         db.add(AuditLog(actor=user.full_name, entity="nalog", entity_id=u.username, action="izmena", summary=f"Izmena naloga {u.full_name}", diff=diff))

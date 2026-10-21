@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     llm_model: str = "gemma-4"
     # "auto" prepoznaje Ollama po adresi, moze se zadati i "ollama" ili "vllm"
     llm_backend: str = "auto"
+    # Lozinke naloga iz pocetnih podataka (postavljaju se pri svakom startu API-ja).
+    # Demo nalozi dobijaju demo_password, nalog "admin" dobija admin_password.
+    demo_password: str = ""
+    admin_password: str = ""
     llm_timeout: float = 180.0
     llm_max_tokens: int = 1200
     # Ako LLM nije dostupan, automatski predji na mock da demo ne stane.

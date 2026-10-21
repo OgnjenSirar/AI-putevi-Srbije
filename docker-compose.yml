@@ -3,7 +3,7 @@
 # Potrebno na serveru: Docker, NVIDIA drajver i NVIDIA Container Toolkit (GPU: L4 24 GB ili jaci).
 #
 # Podrazumevano je podeseno za deljeni server:
-#   - spolja se otvara samo WEB_PORT (podrazumevano 8090), sve ostalo je u internoj mrezi
+#   - spolja se otvara samo WEB_PORT (podrazumevano 8090, HTTPS), sve ostalo je u internoj mrezi
 #   - jezicki model radi na Ollama serveru koji je vec instaliran na hostu (127.0.0.1:11434)
 #   - tragovi idu u postojeci Langfuse na hostu (port 3000), ako su zadati kljucevi projekta
 # Opcioni profili: "vllm" (sopstveni vLLM umesto Ollama), "langfuse" (sopstveni Langfuse).
@@ -31,7 +31,10 @@ x-app-env: &app-env
   IMAGEGEN_URL: http://imagegen:8000
   SMTP_HOST: mailpit
   SMTP_PORT: "1025"
-  PUBLIC_BASE_URL: http://${DEMO_HOST:-localhost}:${WEB_PORT:-8090}
+  PUBLIC_BASE_URL: https://${DEMO_HOST:-localhost}:${WEB_PORT:-8090}
+  # Lozinke naloga iz pocetnih podataka (demo nalozi i admin), postavljaju se pri svakom startu
+  DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
   MEDIA_DIR: /data/media
   # Bez kljuceva nema tragova (aplikacija radi normalno). Kljucevi se prave u Langfuse projektu.
   LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -118,11 +121,16 @@ services:
       api:
         condition: service_healthy
 
+  # Jedini javni ulaz: HTTPS sa self-signed sertifikatom za DEMO_HOST (pravi se pri prvom startu)
   web:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8090}:80"
+      - "${WEB_PORT:-8090}:443"
+    environment:
+      CERT_HOST: ${DEMO_HOST:-localhost}
+    volumes:
+      - web-certs:/etc/nginx/certs
     depends_on:
       - api
       - mailpit
@@ -324,6 +332,7 @@ services:
 
 volumes:
   pgdata:
+  web-certs:
   ollama-sock:
   media:
   hf-cache:

@@ -68,6 +68,8 @@ jobs:
           LANGFUSE_UI_URL: ${{ vars.LANGFUSE_UI_URL }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
           mkdir -p "$CONFIG_DIR"
           ENVF="$CONFIG_DIR/.env"
@@ -93,12 +95,28 @@ jobs:
             k="${line%%=*}"; grep -q "^$k=" "$ENVF" || echo "$line" >> "$ENVF"
           done
           # Vrednosti iz GitHub podesavanja uvek imaju prednost
-          for k in HF_TOKEN DEMO_HOST WEB_PORT OLLAMA_BASE_MODEL LANGFUSE_HOST LANGFUSE_UI_URL LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY; do
+          for k in HF_TOKEN DEMO_HOST WEB_PORT OLLAMA_BASE_MODEL LANGFUSE_HOST LANGFUSE_UI_URL LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY DEMO_PASSWORD ADMIN_PASSWORD; do
             v="${!k}"
             [ -n "$v" ] && set_env "$k" "$v"
           done
+          get_env() { grep -E "^$1=" "$ENVF" | head -1 | cut -d= -f2-; }
+          # Javna adresa servera (za sertifikat i linkove) ako DEMO_HOST nije zadat
+          if [ -z "$(get_env DEMO_HOST)" ] || [ "$(get_env DEMO_HOST)" = "localhost" ]; then
+            IP=$(curl -fsS --max-time 5 https://api.ipify.org || true)
+            [ -n "$IP" ] && set_env DEMO_HOST "$IP"
+          fi
+          # Lozinke za prijavu: iz GitHub tajni ili nasumicne (cuvaju se samo u .env na serveru)
+          for k in DEMO_PASSWORD ADMIN_PASSWORD; do
+            if [ -z "$(get_env $k)" ]; then set_env "$k" "$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-16)"; fi
+          done
+          echo "::add-mask::$(get_env DEMO_HOST)"
+          echo "::add-mask::$(get_env DEMO_PASSWORD)"
+          echo "::add-mask::$(get_env ADMIN_PASSWORD)"
           chmod 600 "$ENVF"
-          grep -E '^(DEMO_HOST|WEB_PORT|AI_MODE|LLM_BASE_URL|LLM_SERVED_NAME|OLLAMA_BASE_MODEL|LANGFUSE_HOST|LANGFUSE_UI_URL)=' "$ENVF" | tee cfg.log
+          # Repozitorijum je javan: u log ne ide ni adresa servera ni lozinke
+          grep -E '^(WEB_PORT|AI_MODE|LLM_BASE_URL|LLM_SERVED_NAME|OLLAMA_BASE_MODEL|LANGFUSE_HOST)=' "$ENVF" | tee cfg.log
+          echo "DEMO_HOST: $( [ "$(get_env DEMO_HOST)" = "localhost" ] && echo 'NIJE postavljen' || echo 'postavljen')" | tee -a cfg.log
+          echo "Lozinke: $( [ -n "$DEMO_PASSWORD" ] && echo 'iz GitHub tajni' || echo "u $ENVF na serveru")" | tee -a cfg.log
           if grep -q '^LANGFUSE_PUBLIC_KEY=.\+' "$ENVF"; then echo "Langfuse tragovi: ukljuceni"; else echo "Langfuse tragovi: iskljuceni (nema kljuceva)"; fi | tee -a cfg.log
           bash deploy/gh-annotate.sh notice "Konfiguracija" cfg.log
 
@@ -141,7 +159,7 @@ jobs:
         run: |
           PORT=$(grep -E '^WEB_PORT=' "$CONFIG_DIR/.env" | cut -d= -f2)
           for i in $(seq 1 60); do
-            if curl -fsS "http://localhost:${PORT:-8090}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
+            if curl -kfsS "https://localhost:${PORT:-8090}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
             sleep 5
           done
           docker compose --env-file "$CONFIG_DIR/.env" logs --no-color --tail=80 api worker web | tee health.log
@@ -161,6 +179,30 @@ jobs:
           else bash deploy/gh-annotate.sh error "Ollama model" init.log 20
           fi
           exit "$CODE"
+
+      - name: Provera zastite pristupa
+        run: |
+          PORT=$(grep -E '^WEB_PORT=' "$CONFIG_DIR/.env" | cut -d= -f2)
+          U="https://localhost:${PORT:-8090}"
+          code() { curl -ks -o /dev/null -w '%{http_code}' "$@"; }
+          ok=1
+          chk() { if [ "$2" = "$3" ]; then echo "OK $1 ($2)" | tee -a zastita.log; else echo "GRESKA $1: dobijeno $2, ocekivano $3" | tee -a zastita.log; ok=0; fi; }
+          : > zastita.log
+          chk "HTTP preusmerava na HTTPS" "$(code "http://localhost:${PORT:-8090}/")" 301
+          chk "API bez prijave" "$(code "$U/api/cases")" 401
+          chk "Mailpit bez prijave" "$(code "$U/mailpit/")" 302
+          chk "Slike bez prijave" "$(code "$U/media/social/x.png")" 302
+          chk "Stara lozinka demo" "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"jasmina","password":"demo"}' "$U/api/auth/login")" 401
+          DP=$(grep -E '^DEMO_PASSWORD=' "$CONFIG_DIR/.env" | cut -d= -f2-)
+          TOKEN=$(curl -ks -X POST -H 'Content-Type: application/json' -c jar.txt -d "{\"username\":\"jasmina\",\"password\":\"$DP\"}" "$U/api/auth/login" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+          chk "Prijava sa lozinkom iz .env" "$( [ -n "$TOKEN" ] && echo 200 || echo 401)" 200
+          chk "API posle prijave" "$(code -H "Authorization: Bearer $TOKEN" "$U/api/cases")" 200
+          chk "Mailpit posle prijave" "$(code -b jar.txt "$U/mailpit/")" 200
+          rm -f jar.txt
+          openssl s_client -connect "localhost:${PORT:-8090}" </dev/null 2>/dev/null | openssl x509 -noout -enddate | sed 's/^notAfter=/Sertifikat vazi do: /' | tee -a zastita.log
+          if [ "$ok" = 1 ]; then bash deploy/gh-annotate.sh notice "Zastita pristupa" zastita.log; else bash deploy/gh-annotate.sh error "Zastita pristupa" zastita.log; fi
+          [ "$ok" = 1 ]
+        shell: bash
 
       - name: Provera AI obrade
         run: |

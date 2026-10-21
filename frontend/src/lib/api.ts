@@ -36,7 +36,7 @@ async function request<T>(method: string, path: string, body?: unknown, form?: F
     if (!location.pathname.startsWith('/prijava')) location.href = '/prijava'
   }
   if (!res.ok) {
-    let msg = `Greška ${res.status}`
+    let msg = res.status === 429 ? 'Previše pokušaja, sačekajte minut pa pokušajte ponovo' : `Greška ${res.status}`
     try {
       const j = await res.json()
       msg = typeof j.detail === 'string' ? j.detail : msg

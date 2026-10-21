@@ -1,11 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { api } from '../lib/api'
-import { useAuth, type User } from '../lib/auth'
+import { useAuth } from '../lib/auth'
 import { Button, ErrorNote, Field, inputCls } from '../components/ui'
-
-const ROLE: Record<string, string> = { operater: 'Operater', supervizor: 'Supervizor', admin: 'Administrator' }
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -14,7 +10,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
-  const { data: users } = useQuery({ queryKey: ['demo-users'], queryFn: () => api.get<User[]>('/api/auth/demo-users') })
 
   async function go(u: string, p: string) {
     setBusy(true)
@@ -63,7 +58,7 @@ export default function LoginPage() {
             <Field label="Korisničko ime">
               <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </Field>
-            <Field label="Lozinka" hint="Za sve demo naloge lozinka je demo">
+            <Field label="Lozinka">
               <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
             </Field>
             <Button variant="primary" className="w-full" loading={busy} type="submit">
@@ -71,24 +66,9 @@ export default function LoginPage() {
             </Button>
             <ErrorNote error={error} />
           </form>
-          <div className="mt-8">
-            <p className="text-sm font-medium text-sivo">Brza prijava</p>
-            <div className="mt-2 grid sm:grid-cols-2 gap-2">
-              {users?.map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => go(u.username, 'demo')}
-                  className="text-left rounded-[8px] border border-linija bg-papir px-3 py-2 hover:border-autoput"
-                >
-                  <div className="font-medium text-sm">{u.full_name}</div>
-                  <div className="text-[12.5px] text-sivo">
-                    {ROLE[u.role]}
-                    {u.org_unit ? `, ${u.org_unit.code}` : ''}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          <p className="mt-8 text-[13px] text-sivo">
+            Pristup imaju samo korisnici sa nalogom. Nalog otvara administrator demoa.
+          </p>
         </div>
       </div>
     </div>

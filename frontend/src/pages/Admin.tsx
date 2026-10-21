@@ -163,7 +163,7 @@ function Users() {
                 </select>
               </Field>
             </div>
-            <Field label={edit.id ? 'Nova lozinka (opciono)' : 'Lozinka'}><input className={inputCls} type="password" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
+            <Field label={edit.id ? 'Nova lozinka (opciono)' : 'Lozinka'} hint="Najmanje 10 znakova"><input className={inputCls} type="password" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} /> Nalog aktivan</label>
             <ErrorNote error={error} />
             <div className="flex justify-end gap-2">

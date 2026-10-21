@@ -115,5 +115,6 @@ def publish(pid: int, request: Request, db: Session = Depends(get_db), user: Use
     # Javna adresa slike za Instagram: iz DEMO_HOST, a ako nije podesen, iz adrese kojom je korisnik otvorio demo
     base = service.settings.public_base_url
     if "localhost" in base and request.headers.get("host"):
-        base = f"{request.url.scheme}://{request.headers['host']}"
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        base = f"{scheme}://{request.headers['host']}"
     return service.post_to_dict(service.publish_simulated(db, p, user.full_name, base_url=base))
