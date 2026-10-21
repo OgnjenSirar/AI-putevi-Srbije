@@ -60,6 +60,12 @@ def run_job(db, job: Job) -> None:
 def main() -> None:
     init_db()
     log.info("Radnik pokrenut (AI rezim: %s, LLM: %s)", settings.ai_mode, settings.llm_base_url)
+    # Radi samo jedan radnik: poslovi ostali "running" posle restarta (npr. deploy) se vracaju u red
+    with SessionLocal() as db:
+        n = db.execute(text("UPDATE jobs SET status='queued', attempts=GREATEST(attempts-1, 0) WHERE status='running'")).rowcount
+        db.commit()
+        if n:
+            log.info("Vraceno u red poslova prekinutih restartom: %s", n)
     last_index_try = 0.0
     while True:
         db = SessionLocal()
