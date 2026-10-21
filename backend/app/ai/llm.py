@@ -158,9 +158,21 @@ def chat_json(feature: str, messages: list[dict], schema: dict, mock_fn: Callabl
         out = _extract_json(content)
         _record(feature, "live", pt, ct, latency, case_id, org_unit_id)
     except Exception as e:
-        _record(feature, "live", pt, ct, latency, case_id, org_unit_id, ok=False, error=f"JSON: {e}")
-        out = mock_fn()
-        return out, {"mode": "mock", "model": "rezervni-rezim", "fallback_error": "neispravan JSON"}
+        # Jedan ponovljeni pokusaj sa temperaturom 0 pre prelaska na pravila
+        log.warning("Neispravan JSON (%s), ponavljam poziv", e)
+        try:
+            resp = client.chat.completions.create(**{**kwargs, "temperature": 0.0})
+            content = resp.choices[0].message.content or "{}"
+            out = _extract_json(content)
+            latency = int((time.time() - t0) * 1000)
+            usage = getattr(resp, "usage", None)
+            pt = (getattr(usage, "prompt_tokens", 0) or 0) + pt
+            ct = (getattr(usage, "completion_tokens", 0) or 0) + ct
+            _record(feature, "live", pt, ct, latency, case_id, org_unit_id)
+        except Exception as e2:
+            _record(feature, "live", pt, ct, latency, case_id, org_unit_id, ok=False, error=f"JSON: {e2}")
+            out = mock_fn()
+            return out, {"mode": "mock", "model": "rezervni-rezim", "fallback_error": "neispravan JSON"}
     return out, {"mode": "live", "model": settings.llm_model, "prompt_tokens": pt, "completion_tokens": ct,
                  "latency_ms": latency, "trace_id": getattr(resp, "id", "")}
 
