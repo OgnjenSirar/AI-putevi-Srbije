@@ -1,0 +1,8 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+diffusers>=0.41.0
+transformers>=4.57
+accelerate>=1.10
+safetensors
+sentencepiece
+pillow

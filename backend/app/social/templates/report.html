@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: "InterT"; src: url("{{ font_dir }}/Inter-Regular.otf"); font-weight: 400; }
+@font-face { font-family: "InterT"; src: url("{{ font_dir }}/Inter-SemiBold.otf"); font-weight: 600; }
+@font-face { font-family: "InterD"; src: url("{{ font_dir }}/InterDisplay-Bold.otf"); font-weight: 700; }
+body { font-family: "InterT", sans-serif; color: #1b2433; font-size: 10.5pt; }
+h1 { font-family: "InterD"; font-size: 22pt; margin: 0 0 4px; color: #0B1F3A; }
+h2 { font-family: "InterD"; font-size: 13pt; margin: 22px 0 8px; color: #0B1F3A; border-bottom: 2px solid #FFB000; padding-bottom: 4px; }
+.muted { color: #6b7686; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+.kpi { border: 1px solid #dfe4ea; border-radius: 8px; padding: 10px 12px; }
+.kpi b { display: block; font-family: "InterD"; font-size: 17pt; color: #0B1F3A; }
+.kpi span { font-size: 8.5pt; color: #6b7686; }
+table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+th { text-align: left; font-weight: 600; font-size: 8.5pt; color: #6b7686; border-bottom: 1px solid #c9d1db; padding: 5px 6px; }
+td { border-bottom: 1px solid #edf0f3; padding: 5px 6px; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 90px; margin-top: 10px; }
+.bars div { flex: 1; background: #2f6fd6; border-radius: 2px 2px 0 0; min-height: 1px; }
+.stack { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.legend { display: flex; gap: 14px; font-size: 8.5pt; margin-top: 6px; color: #4a5566; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.note { font-size: 8.5pt; color: #6b7686; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>Izveštaj o radu Korisničkog centra</h1>
+<div class="muted">Poslednjih {{ days }} dana, stanje na dan {{ now.strftime('%d.%m.%Y.') }} · demo, izmišljeni podaci</div>
+<div class="kpis">
+  <div class="kpi"><b>{{ s.kpi.primljeno }}</b><span>primljeno predmeta</span></div>
+  <div class="kpi"><b>{{ s.kpi.zatvoreno }}</b><span>zatvoreno</span></div>
+  <div class="kpi"><b>{{ fmt(s.kpi.prosek_prvog_odgovora_h) }} h</b><span>prosek do prvog odgovora</span></div>
+  <div class="kpi"><b>{{ fmt(s.kpi.u_roku_procenat) }}%</b><span>odgovoreno u roku</span></div>
+  <div class="kpi"><b>{{ s.kpi.otvoreno_sada }}</b><span>otvoreno sada</span></div>
+  <div class="kpi"><b>{{ s.kpi.prekoraceno_sada }}</b><span>prekoračen rok</span></div>
+  <div class="kpi"><b>{{ fmt(a.tacnost_jedinice) }}%</b><span>tačnost AI predloga jedinice</span></div>
+  <div class="kpi"><b>{{ fmt(c.ukupno.trosak) }}</b><span>AI trošak (RSD, interna cena)</span></div>
+</div>
+
+<h2>Primljeni predmeti po danima</h2>
+<div class="bars">{% for r in s.po_danima %}<div style="height: {{ (r.primljeno / max_day * 100)|round(1) }}%" title="{{ r.datum }}"></div>{% endfor %}</div>
+
+<h2>Rad po jedinicama</h2>
+<table>
+<tr><th>Jedinica</th><th>Naziv</th><th>Primljeno</th><th>Zatvoreno</th><th>Otvoreno</th><th>Prekoračeno</th><th>Prosek odgovora (h)</th></tr>
+{% for r in s.po_jedinicama %}<tr><td>{{ r.jedinica }}</td><td>{{ r.naziv }}</td><td class="n">{{ r.primljeno }}</td><td class="n">{{ r.zatvoreno }}</td><td class="n">{{ r.otvoreno_sada }}</td><td class="n">{{ r.prekoraceno_sada }}</td><td class="n">{{ fmt(r.prosek_odgovora_h) }}</td></tr>{% endfor %}
+</table>
+
+<h2>Teme obraćanja</h2>
+<table>
+<tr><th>Kategorija</th><th>Broj</th></tr>
+{% for r in s.po_kategorijama[:12] %}<tr><td>{{ r.kategorija }}</td><td class="n">{{ r.broj }}</td></tr>{% endfor %}
+</table>
+
+<h2>Podrška veštačke inteligencije</h2>
+<div>Predlog nadležne jedinice prihvaćen u <b>{{ fmt(a.tacnost_jedinice) }}%</b> slučajeva, prioriteta u <b>{{ fmt(a.tacnost_prioriteta) }}%</b>.</div>
+{% set colors = {'bez_izmena': '#1f9d6b', 'manje_izmene': '#7cc49f', 'vece_izmene': '#f0b44c', 'napisan_iznova': '#d9534f'} %}
+<div class="stack">{% for r in a.izmene %}<div style="width: {{ r.procenat }}%; background: {{ colors[r.klasa] }}"></div>{% endfor %}</div>
+<div class="legend">{% for r in a.izmene %}<span><i style="background: {{ colors[r.klasa] }}"></i>{{ r.naziv }} {{ r.procenat }}%</span>{% endfor %}</div>
+
+<h2>Trošak veštačke inteligencije</h2>
+<table>
+<tr><th>Funkcija</th><th>Poziva</th><th>Ulazni tokeni</th><th>Izlazni tokeni</th><th>Trošak (RSD)</th><th>Prosečno (ms)</th></tr>
+{% for r in c.po_funkciji %}<tr><td>{{ r.naziv }}</td><td class="n">{{ r.poziva }}</td><td class="n">{{ r.ulaz }}</td><td class="n">{{ r.izlaz }}</td><td class="n">{{ fmt(r.trosak) }}</td><td class="n">{{ r.prosecno_ms }}</td></tr>{% endfor %}
+</table>
+<div class="note">{{ c.cene.napomena }}</div>
+</body>
+</html>

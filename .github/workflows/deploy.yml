@@ -1,0 +1,96 @@
+name: Deploy demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      reset_demo:
+        description: "Vrati demo bazu na pocetno stanje posle deploy-a"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+env:
+  COMPOSE_PROJECT_NAME: kc-demo
+
+jobs:
+  deploy:
+    # Promeniti labelu ako runner na demo serveru ima drugu (npr. [self-hosted, demo])
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Provera preduslova
+        run: |
+          # Trajna konfiguracija na serveru, van radnog direktorijuma runnera
+          CFG="${{ vars.CONFIG_DIR }}"
+          echo "CONFIG_DIR=${CFG:-$HOME/kc-demo-config}" >> "$GITHUB_ENV"
+          docker version --format 'Docker {{.Server.Version}}'
+          docker compose version
+          if command -v nvidia-smi >/dev/null; then nvidia-smi --query-gpu=name,memory.total --format=csv; else echo "UPOZORENJE: nvidia-smi nije pronadjen"; fi
+
+      - name: Priprema .env (samo pri prvom deploy-u)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DEMO_HOST: ${{ vars.DEMO_HOST }}
+          WEB_PORT: ${{ vars.WEB_PORT }}
+        run: |
+          mkdir -p "$CONFIG_DIR"
+          if [ ! -f "$CONFIG_DIR/.env" ]; then
+            cp .env.example "$CONFIG_DIR/.env"
+            rnd() { openssl rand -hex "$1"; }
+            sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(rnd 16)/" "$CONFIG_DIR/.env"
+            sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$(rnd 32)/" "$CONFIG_DIR/.env"
+            sed -i "s/^LANGFUSE_NEXTAUTH_SECRET=.*/LANGFUSE_NEXTAUTH_SECRET=$(rnd 32)/" "$CONFIG_DIR/.env"
+            sed -i "s/^LANGFUSE_SALT=.*/LANGFUSE_SALT=$(rnd 16)/" "$CONFIG_DIR/.env"
+            sed -i "s/^LANGFUSE_ENCRYPTION_KEY=.*/LANGFUSE_ENCRYPTION_KEY=$(rnd 32)/" "$CONFIG_DIR/.env"
+            sed -i "s/^LANGFUSE_SECRET_KEY=.*/LANGFUSE_SECRET_KEY=sk-lf-$(rnd 16)/" "$CONFIG_DIR/.env"
+            sed -i "s/^LANGFUSE_INIT_USER_PASSWORD=.*/LANGFUSE_INIT_USER_PASSWORD=$(rnd 8)/" "$CONFIG_DIR/.env"
+            sed -i "s/^CLICKHOUSE_PASSWORD=.*/CLICKHOUSE_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
+            sed -i "s/^MINIO_PASSWORD=.*/MINIO_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
+            sed -i "s/^REDIS_PASSWORD=.*/REDIS_PASSWORD=$(rnd 12)/" "$CONFIG_DIR/.env"
+            echo "Napravljen $CONFIG_DIR/.env sa nasumicnim lozinkama"
+          fi
+          # Vrednosti iz GitHub podesavanja uvek imaju prednost
+          [ -n "$HF_TOKEN" ] && sed -i "s/^HF_TOKEN=.*/HF_TOKEN=$HF_TOKEN/" "$CONFIG_DIR/.env"
+          [ -n "$DEMO_HOST" ] && sed -i "s/^DEMO_HOST=.*/DEMO_HOST=$DEMO_HOST/" "$CONFIG_DIR/.env"
+          [ -n "$WEB_PORT" ] && sed -i "s/^WEB_PORT=.*/WEB_PORT=$WEB_PORT/" "$CONFIG_DIR/.env"
+          chmod 600 "$CONFIG_DIR/.env"
+          grep -E '^(DEMO_HOST|WEB_PORT|LANGFUSE_PORT|AI_MODE|LLM_MODEL_ID)=' "$CONFIG_DIR/.env"
+
+      - name: Build
+        run: docker compose --env-file "$CONFIG_DIR/.env" build --pull
+
+      - name: Pokretanje
+        run: docker compose --env-file "$CONFIG_DIR/.env" up -d --remove-orphans
+
+      - name: Cekanje da aplikacija proradi
+        run: |
+          PORT=$(grep -E '^WEB_PORT=' "$CONFIG_DIR/.env" | cut -d= -f2)
+          for i in $(seq 1 60); do
+            if curl -fsS "http://localhost:${PORT:-8080}/api/health" >/dev/null; then echo "Aplikacija radi"; exit 0; fi
+            sleep 5
+          done
+          docker compose --env-file "$CONFIG_DIR/.env" logs --tail=80 api worker web
+          exit 1
+
+      - name: Reset demo baze
+        if: ${{ github.event.inputs.reset_demo == 'true' }}
+        run: |
+          docker compose --env-file "$CONFIG_DIR/.env" exec -T api python -c "from app.seed.seed import reset_database, seed_all; from app.db import SessionLocal; from app.seed.social_examples import seed_social_examples; reset_database(); db=SessionLocal(); print(seed_all(db)); seed_social_examples()"
+
+      - name: Stanje servisa
+        if: always()
+        run: |
+          docker compose --env-file "$CONFIG_DIR/.env" ps
+          echo "Modeli se pri prvom pokretanju preuzimaju sa Hugging Face-a (vise GB), pa vLLM i servis za slike mogu biti spremni tek posle nekoliko minuta."
+          echo "Do tada aplikacija radi u rezervnom rezimu i automatski prelazi na pravi model kada postane dostupan."
+
+      - name: Ciscenje starih slika
+        if: success()
+        run: docker image prune -f

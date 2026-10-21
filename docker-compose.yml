@@ -1,0 +1,277 @@
+# Korisnicki centar (demo): ceo sistem jednom komandom.
+#   docker compose --env-file .env up -d --build
+# Potrebno na serveru: Docker, NVIDIA drajver i NVIDIA Container Toolkit (GPU: L4 24 GB ili jaci).
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://demo:${POSTGRES_PASSWORD:-demo}@db:5432/kcdemo
+  SECRET_KEY: ${SECRET_KEY:-promeniti-tajni-kljuc}
+  AI_MODE: ${AI_MODE:-live}
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:8000/v1}
+  LLM_MODEL: ${LLM_SERVED_NAME:-gemma-4}
+  EMBED_URL: http://embed:80
+  RERANK_URL: http://rerank:80
+  IMAGEGEN_URL: http://imagegen:8000
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+  PUBLIC_BASE_URL: http://${DEMO_HOST:-localhost}:${WEB_PORT:-8080}
+  MEDIA_DIR: /data/media
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-kcdemo}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-kcdemo}
+  LANGFUSE_HOST: http://langfuse-web:3000
+  LANGFUSE_BASE_URL: http://langfuse-web:3000
+  LANGFUSE_UI_URL: http://${DEMO_HOST:-localhost}:${LANGFUSE_PORT:-3001}/project/kc-demo/traces
+
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://${DEMO_HOST:-localhost}:${LANGFUSE_PORT:-3001}
+  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-promeniti-nextauth}
+  DATABASE_URL: postgresql://demo:${POSTGRES_PASSWORD:-demo}@db:5432/langfuse
+  SALT: ${LANGFUSE_SALT:-promeniti-salt}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:-miniosecret}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:-miniosecret}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${REDIS_PASSWORD:-redissecret}
+
+services:
+  # ---------------------------------------------------------------- aplikacija
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-demo}
+      POSTGRES_DB: kcdemo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-langfuse.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d kcdemo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - media:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment: *app-env
+    volumes:
+      - media:/data/media
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+      - mailpit
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    environment:
+      MP_WEBROOT: /mailpit/
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "5000"
+
+  # ---------------------------------------------------------------- AI modeli
+  llm:
+    <<: *gpu
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.32.0}
+    restart: unless-stopped
+    ipc: host
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    command: >
+      --model ${LLM_MODEL_ID:-aleada/Gemma-4-12B-it-W4A16}
+      --served-model-name ${LLM_SERVED_NAME:-gemma-4}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.50}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-16384}
+      --max-num-seqs ${VLLM_MAX_NUM_SEQS:-8}
+      ${VLLM_EXTRA_ARGS:-}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 1200s
+
+  embed:
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9}
+    restart: unless-stopped
+    command: --model-id ${EMBED_MODEL_ID:-BAAI/bge-m3} --max-client-batch-size 32
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - tei-cache:/data
+
+  rerank:
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9}
+    restart: unless-stopped
+    command: --model-id ${RERANK_MODEL_ID:-BAAI/bge-reranker-v2-m3}
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - tei-cache:/data
+
+  imagegen:
+    <<: *gpu
+    build: ./imagegen
+    restart: unless-stopped
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      IMAGEGEN_MODEL: ${IMAGEGEN_MODEL:-black-forest-labs/FLUX.2-klein-4B}
+      IMAGEGEN_OFFLOAD: ${IMAGEGEN_OFFLOAD:-model}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+
+  # Rezervna varijanta LLM servera (ako vLLM ne podrzava izabrani model na serveru):
+  #   docker compose --profile ollama up -d ollama
+  #   u .env: LLM_BASE_URL=http://ollama:11434/v1 i LLM_SERVED_NAME=gemma4:12b
+  ollama:
+    <<: *gpu
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+    volumes:
+      - ollama:/root/.ollama
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull ${OLLAMA_MODEL:-gemma4:12b} && wait"]
+
+  # ---------------------------------------------------------------- Langfuse (nadzor AI poziva)
+  langfuse-web:
+    image: ${LANGFUSE_IMAGE:-langfuse/langfuse:4}
+    restart: unless-stopped
+    ports:
+      - "${LANGFUSE_PORT:-3001}:3000"
+    environment:
+      <<: *langfuse-env
+      LANGFUSE_INIT_ORG_ID: kc-demo-org
+      LANGFUSE_INIT_ORG_NAME: Korisnicki centar (demo)
+      LANGFUSE_INIT_PROJECT_ID: kc-demo
+      LANGFUSE_INIT_PROJECT_NAME: Korisnicki centar
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-kcdemo}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-kcdemo}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@demo-kc.rs}
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-demo-lozinka-123}
+    depends_on: &lf-deps
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  langfuse-worker:
+    image: ${LANGFUSE_WORKER_IMAGE:-langfuse/langfuse-worker:4}
+    restart: unless-stopped
+    environment: *langfuse-env
+    depends_on: *lf-deps
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-miniosecret}
+    volumes:
+      - minio-data:/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: --requirepass ${REDIS_PASSWORD:-redissecret} --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redissecret}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
+  ollama:
+  media:
+  hf-cache:
+  tei-cache:
+  clickhouse-data:
+  clickhouse-logs:
+  minio-data:
+  redis-data:

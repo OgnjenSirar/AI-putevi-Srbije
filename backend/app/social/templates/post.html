@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: "InterD"; src: url("{{ font_dir }}/InterDisplay-ExtraBold.otf"); font-weight: 800; }
+@font-face { font-family: "InterD"; src: url("{{ font_dir }}/InterDisplay-Bold.otf"); font-weight: 700; }
+@font-face { font-family: "InterT"; src: url("{{ font_dir }}/Inter-Regular.otf"); font-weight: 400; }
+@font-face { font-family: "InterT"; src: url("{{ font_dir }}/Inter-Medium.otf"); font-weight: 500; }
+@font-face { font-family: "InterT"; src: url("{{ font_dir }}/Inter-SemiBold.otf"); font-weight: 600; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: {{ w }}px; height: {{ h }}px; overflow: hidden; }
+body {
+  font-family: "InterT", "Noto Sans", sans-serif; color: #fff; background: #0B1F3A;
+  --accent: {{ accent }}; --pad: 84px;
+}
+.canvas { position: relative; width: {{ w }}px; height: {{ h }}px; overflow: hidden; }
+.bg { position: absolute; inset: 0; }
+.bg.brand {
+  background:
+    radial-gradient(circle at 88% 12%, color-mix(in srgb, var(--accent) 38%, transparent) 0, transparent 38%),
+    repeating-linear-gradient(118deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 46px),
+    linear-gradient(160deg, #102B52 0%, #0B1F3A 55%, #071428 100%);
+}
+.bg.photo { background: url("{{ background }}") center/cover no-repeat; }
+.shade { position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(7,20,40,0.55) 0%, rgba(7,20,40,0.15) 30%, rgba(7,20,40,0.78) 62%, rgba(7,20,40,0.96) 100%); }
+.road { position: absolute; left: 0; right: 0; bottom: 0; height: 14px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 90px, transparent 90px 150px); opacity: .9; }
+.content { position: relative; height: 100%; display: flex; flex-direction: column; padding: var(--pad); padding-bottom: calc(var(--pad) + 18px); }
+.top { display: flex; align-items: center; justify-content: space-between; }
+.brand { display: flex; align-items: center; gap: 18px; font-family: "InterD"; font-weight: 700; font-size: 30px; letter-spacing: .2px; }
+.mark { width: 54px; height: 54px; border-radius: 14px; background: var(--accent); display: grid; place-items: center; color: #0B1F3A; font-size: 24px; font-weight: 800; }
+.chip { font-family: "InterT"; font-weight: 600; font-size: 22px; letter-spacing: 2px; text-transform: uppercase;
+  padding: 10px 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,.35); color: rgba(255,255,255,.85); }
+.spacer { flex: 1; }
+.icon { width: 132px; height: 132px; border-radius: 30px; background: var(--accent); display: grid; place-items: center; margin-bottom: 40px; color: #0B1F3A; }
+.icon svg { width: 84px; height: 84px; }
+.kicker { font-weight: 600; font-size: 28px; letter-spacing: 3px; text-transform: uppercase; color: var(--accent); margin-bottom: 18px; }
+.naslov { font-family: "InterD"; font-weight: 800; font-size: 96px; line-height: 1.02; letter-spacing: -1.5px; max-height: 3.12em; overflow: hidden; }
+.poruka { margin-top: 30px; font-size: 38px; line-height: 1.32; color: rgba(255,255,255,.92); max-height: 4em; overflow: hidden; }
+.napomena { margin-top: 22px; font-size: 30px; line-height: 1.3; color: rgba(255,255,255,.75); max-height: 2.6em; overflow: hidden; }
+.signs { display: flex; gap: 22px; margin-top: 38px; flex-wrap: wrap; }
+.sign { background: var(--accent); color: #0B1F3A; border-radius: 18px; padding: 20px 28px; max-width: 100%; }
+.sign small { display: block; font-weight: 600; font-size: 20px; letter-spacing: 2px; text-transform: uppercase; opacity: .75; }
+.sign b { display: block; font-family: "InterD"; font-weight: 800; font-size: 40px; line-height: 1.1; max-height: 1.15em; overflow: hidden; white-space: nowrap; }
+.big { font-family: "InterD"; font-weight: 800; font-size: 150px; line-height: 1; color: var(--accent); letter-spacing: -3px; margin-top: 18px; max-height: 1.05em; overflow: hidden; white-space: nowrap; }
+.cta { display: inline-block; margin-top: 36px; background: #fff; color: #0B1F3A; font-weight: 600; font-size: 32px; padding: 18px 30px; border-radius: 16px; max-width: 100%; white-space: nowrap; overflow: hidden; }
+.potpis { margin-top: 34px; font-family: "InterD"; font-weight: 700; font-size: 34px; color: var(--accent); max-height: 1.3em; overflow: hidden; }
+.foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 44px; font-size: 24px; color: rgba(255,255,255,.7); gap: 24px; }
+.ai { font-size: 19px; color: rgba(255,255,255,.6); text-align: right; }
+body.story { --pad: 96px; }
+body.story .naslov { font-size: 112px; }
+body.story .poruka { font-size: 44px; }
+body.story .icon { margin-bottom: 56px; }
+body.kvadrat .naslov { font-size: 88px; }
+body.kvadrat .poruka { font-size: 34px; }
+body.kvadrat .icon { width: 112px; height: 112px; margin-bottom: 28px; }
+body.kvadrat .icon svg { width: 70px; height: 70px; }
+</style>
+</head>
+<body class="{{ fmt }}">
+<div class="canvas">
+  {% if background %}<div class="bg photo"></div><div class="shade"></div>{% else %}<div class="bg brand"></div>{% endif %}
+  <div class="road"></div>
+  <div class="content">
+    <div class="top">
+      <div class="brand"><div class="mark">KC</div>Korisnički centar</div>
+      <div class="chip">{{ chip }}</div>
+    </div>
+    <div class="spacer"></div>
+    {% if icon %}<div class="icon">{{ icon | safe }}</div>{% endif %}
+    {% if tpl == 'radovi' %}
+      <div class="kicker">Radovi na putu</div>
+      <h1 class="naslov polje" data-key="naslov">{{ f.naslov }}</h1>
+      <div class="signs">
+        {% if f.deonica %}<div class="sign"><small>Deonica</small><b class="polje" data-key="deonica">{{ f.deonica }}</b></div>{% endif %}
+        {% if f.period %}<div class="sign"><small>Period</small><b class="polje" data-key="period">{{ f.period }}</b></div>{% endif %}
+      </div>
+      <p class="poruka polje" data-key="poruka">{{ f.poruka }}</p>
+    {% elif tpl == 'obavestenje' %}
+      <div class="kicker">Obaveštenje za vozače</div>
+      <h1 class="naslov polje" data-key="naslov">{{ f.naslov }}</h1>
+      <p class="poruka polje" data-key="poruka">{{ f.poruka }}</p>
+      {% if f.napomena %}<p class="napomena polje" data-key="napomena">{{ f.napomena }}</p>{% endif %}
+    {% elif tpl == 'naplata' %}
+      <div class="kicker">Elektronska naplata</div>
+      <h1 class="naslov polje" data-key="naslov">{{ f.naslov }}</h1>
+      {% if f.istaknuto %}<div class="big polje" data-key="istaknuto">{{ f.istaknuto }}</div>{% endif %}
+      <p class="poruka polje" data-key="poruka">{{ f.poruka }}</p>
+      {% if f.poziv %}<div class="cta polje" data-key="poziv">{{ f.poziv }}</div>{% endif %}
+    {% else %}
+      <h1 class="naslov polje" data-key="naslov">{{ f.naslov }}</h1>
+      <p class="poruka polje" data-key="poruka">{{ f.poruka }}</p>
+      {% if f.potpis %}<div class="potpis polje" data-key="potpis">{{ f.potpis }}</div>{% endif %}
+    {% endif %}
+    <div class="foot">
+      <div>demo-kc.rs · +381 11 555 0100</div>
+      {% if ai_background %}<div class="ai">Pozadina generisana<br>uz pomoć veštačke inteligencije</div>{% endif %}
+    </div>
+  </div>
+</div>
+</body>
+</html>
